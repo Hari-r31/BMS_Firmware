@@ -17,7 +17,13 @@
   #include "accelerometer.h"
 #endif
 
+/* ================= GLOBAL SYSTEM STATE ================= */
+
+bool chargingActive = false;
+bool fanActive = false;
+
 /* ================= Banner ================= */
+
 void printSystemBanner() {
   Serial.println("=================================");
   Serial.println("        EV BMS SYSTEM");
@@ -29,6 +35,7 @@ void printSystemBanner() {
 }
 
 /* ================= Initialization ================= */
+
 void initializeAllSystems() {
   initFaultManager();
   initSOH();
@@ -37,7 +44,6 @@ void initializeAllSystems() {
   wifiInit();
   gsmInit();
   storageInit();
-
 
 #if ENABLE_GEOLOCATION
   initGPS();
@@ -49,6 +55,7 @@ void initializeAllSystems() {
 }
 
 /* ================= Diagnostics ================= */
+
 void performSystemDiagnostics() {
   if (!wifiConnected()) {
     Serial.println("⚠ WiFi not connected");
@@ -66,18 +73,14 @@ void performSystemDiagnostics() {
 }
 
 /* ================= Health ================= */
+
 void updateSystemHealth(bool fault, float temp, unsigned long cycleCount) {
   updateSOH(0.0, temp, fault);
-
-  updateRUL(
-    0.0,
-    temp,
-    getSOH(),
-    cycleCount
-  );
+  updateRUL(0.0, temp, getSOH(), cycleCount);
 }
 
 /* ================= External Events ================= */
+
 void checkExternalEvents() {
 
 #if ENABLE_GEOLOCATION
@@ -100,8 +103,8 @@ void checkExternalEvents() {
 }
 
 /* ================= Charging ================= */
+
 void controlCharging(float packVoltage, bool fault) {
-  static bool chargingActive = false;
 
   if (fault) {
     chargingActive = false;
@@ -122,8 +125,8 @@ void controlCharging(float packVoltage, bool fault) {
 }
 
 /* ================= Thermal ================= */
+
 void controlThermalManagement(float temperature, bool fault) {
-  static bool fanActive = false;
 
   if ((temperature >= FAN_ON_TEMP || fault) && !fanActive) {
     fanActive = true;
@@ -137,6 +140,7 @@ void controlThermalManagement(float temperature, bool fault) {
 }
 
 /* ================= Telemetry ================= */
+
 void displayTelemetry(float packVoltage,
                       const CurrentData& iData,
                       float temperature,
@@ -151,10 +155,19 @@ void displayTelemetry(float packVoltage,
 }
 
 /* ================= Cloud ================= */
+
 void uploadSystemData(float packVoltage,
                       const CurrentData& iData,
                       float temperature,
                       bool fault) {
+
+  float lat = 0.0f;
+  float lon = 0.0f;
+
+#if ENABLE_GEOLOCATION
+  lat = gpsGetLatitude();
+  lon = gpsGetLongitude();
+#endif
 
   uploadComprehensiveTelemetry(
     packVoltage,
@@ -165,9 +178,14 @@ void uploadSystemData(float packVoltage,
     estimateRUL(),
     fault,
     faultReason(),
-    gpsGetLatitude(),
-    gpsGetLongitude(),
+    lat,
+    lon,
     getImpactCount(),
-    getShockCount()
+    getShockCount(),
+    chargingActive,
+    fanActive,
+    digitalRead(CHARGE_RELAY_PIN),
+    digitalRead(MOTOR_RELAY_PIN)
   );
+
 }

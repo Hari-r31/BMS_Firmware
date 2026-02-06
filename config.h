@@ -10,10 +10,10 @@ static const char* WIFI_PASS = "we4rscrap!";
    SUPABASE CLOUD
    ========================================================= */
 static const char* SUPABASE_URL =
-  "https://omfcwxwtblbhuucqhljf.supabase.co/rest/v1/telemetry";
+  "https://omfcwxwtblbhuucqhljf.supabase.co/rest/v1/bms_telemetry";
 
 static const char* SUPABASE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9tZmN3eHd0YmxiaHV1Y3FobGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1MTUxMjgsImV4cCI6MjA4NTA5MTEyOH0.--PZM64ogLL_DIUS7N6ZgFH1L5E8WBWZ4X642L3xnno"
 ;
 
 /* =========================================================
@@ -113,8 +113,8 @@ static const char* SUPABASE_KEY =
    ACCELEROMETER / IMPACT
    ========================================================= */
 #define ENABLE_IMPACT_DETECTION true
-#define IMPACT_THRESHOLD_G 4.0
-#define SHOCK_THRESHOLD_G 2.5
+#define IMPACT_THRESHOLD_G 0.4
+#define SHOCK_THRESHOLD_G 1
 
 /* =========================================================
    GPS / GEOFENCE

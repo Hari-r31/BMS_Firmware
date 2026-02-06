@@ -7,7 +7,6 @@
 
 static unsigned long uploadCount = 0;
 static unsigned long lastUploadTime = 0;
-static uint8_t connectionQuality = 0;
 
 /* ================= WiFi ================= */
 
@@ -43,13 +42,17 @@ void uploadComprehensiveTelemetry(
   float power,
   float tempPack,
   float soh,
-  int rul,
+  int rulCycles,
   bool fault,
   const char* faultMessage,
   float latitude,
   float longitude,
   uint32_t impactCount,
-  uint32_t shockCount
+  uint32_t shockCount,
+  bool chargingActive,
+  bool fanActive,
+  bool chargerRelay,
+  bool motorRelay
 ) {
   if (millis() - lastUploadTime < CLOUD_UPLOAD_INTERVAL_MS) return;
   if (!wifiConnected()) return;
@@ -60,25 +63,35 @@ void uploadComprehensiveTelemetry(
 
   http.addHeader("Content-Type", "application/json");
   http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
   http.addHeader("Prefer", "return=minimal");
 
-  char body[768];
+  char body[1024];
   snprintf(body, sizeof(body),
     "{"
-    "\"device_id\":\"%s\","
-    "\"timestamp\":%lu,"
-    "\"pack_voltage\":%.2f,"
-    "\"current\":%.2f,"
-    "\"power\":%.2f,"
-    "\"temp_pack\":%.1f,"
-    "\"soh\":%.1f,"
-    "\"rul\":%d,"
-    "\"fault\":%s,"
-    "\"fault_message\":\"%s\","
-    "\"latitude\":%.6f,"
-    "\"longitude\":%.6f,"
-    "\"impact_count\":%lu,"
-    "\"shock_count\":%lu"
+      "\"device_id\":\"%s\","
+      "\"device_uptime_ms\":%lu,"
+      "\"pack_voltage\":%.2f,"
+      "\"current\":%.2f,"
+      "\"power\":%.2f,"
+      "\"temp_pack\":%.2f,"
+      "\"soh\":%.2f,"
+      "\"rul_cycles\":%d,"
+      "\"fault\":%s,"
+      "\"fault_message\":\"%s\","
+      "\"latitude\":%.6f,"
+      "\"longitude\":%.6f,"
+      "\"impact_count\":%lu,"
+      "\"shock_count\":%lu,"
+      "\"connection_quality\":%u,"
+
+      "\"is_charging\":%s,"
+      "\"is_discharging\":%s,"
+      "\"charger_relay_on\":%s,"
+      "\"motor_load_on\":%s,"
+      "\"fan_on\":%s,"
+      "\"cooling_active\":%s"
+
     "}",
     DEVICE_ID,
     millis(),
@@ -87,16 +100,24 @@ void uploadComprehensiveTelemetry(
     power,
     tempPack,
     soh,
-    rul,
+    rulCycles,
     fault ? "true" : "false",
     faultMessage ? faultMessage : "",
     latitude,
     longitude,
     impactCount,
-    shockCount
+    shockCount,
+    getConnectionQuality(),
+
+    chargingActive ? "true" : "false",
+    chargingActive ? "false" : "true",
+    chargerRelay ? "true" : "false",
+    motorRelay ? "true" : "false",
+    fanActive ? "true" : "false",
+    fanActive ? "true" : "false"
   );
 
-  int code = http.POST(body);
+  int code = http.POST((uint8_t*)body, strlen(body));
 
   if (code >= 200 && code < 300) {
     uploadCount++;
@@ -106,6 +127,7 @@ void uploadComprehensiveTelemetry(
     Serial.print("[CLOUD] ✗ Upload failed (");
     Serial.print(code);
     Serial.println(")");
+    Serial.println(body);
   }
 
   http.end();
@@ -118,5 +140,11 @@ unsigned long getUploadCount() {
 }
 
 uint8_t getConnectionQuality() {
-  return connectionQuality;
+  if (!wifiConnected()) return 0;
+  int rssi = WiFi.RSSI();
+  if (rssi > -50) return 5;
+  if (rssi > -60) return 4;
+  if (rssi > -70) return 3;
+  if (rssi > -80) return 2;
+  return 1;
 }

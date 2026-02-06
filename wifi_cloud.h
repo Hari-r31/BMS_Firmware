@@ -15,13 +15,17 @@ void uploadComprehensiveTelemetry(
   float power,
   float tempPack,
   float soh,
-  int rul,
+  int rulCycles,
   bool fault,
   const char* faultMessage,
   float latitude,
   float longitude,
   uint32_t impactCount,
-  uint32_t shockCount
+  uint32_t shockCount,
+  bool chargingActive,
+  bool fanActive,
+  bool chargerRelay,
+  bool motorRelay
 );
 
 /* ================= Status ================= */

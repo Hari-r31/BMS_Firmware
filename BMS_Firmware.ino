@@ -7,6 +7,7 @@
 #include "wifi_cloud.h"
 #include "lcd.h"
 #include "nvs_logger.h"
+#include "accelerometer.h"
 
 
 /* ================= Setup ================= */
@@ -32,6 +33,14 @@ void setup() {
 /* ================= Main Loop ================= */
 void loop() {
   static bool lastFaultState = false;
+
+  #if ENABLE_IMPACT_DETECTION
+    static unsigned long lastAccel = 0;
+    if (millis() - lastAccel >= 10) {   // 100 Hz
+      lastAccel = millis();
+      readAccelerometer();
+    }
+  #endif
 
   wifiEnsure();
 

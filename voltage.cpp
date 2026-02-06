@@ -6,6 +6,14 @@
 
 static bool initialized = false;
 
+/* 
+ * These MUST match your real-world calibration
+ * DIVIDER = effective hardware scaling
+ * CORR    = ADC + tolerance correction
+ */
+static const float VOLTAGE_DIVIDER = 5.0f;   // effective divider ratio
+static const float VOLTAGE_CORR    = 1.092f; // measured calibration factor
+
 /* ================= ADC ================= */
 
 static float readADCVoltage() {
@@ -17,6 +25,8 @@ static float readADCVoltage() {
   }
 
   float avg = (float)sum / ADC_SAMPLES;
+
+  // Convert ADC counts → volts at ESP32 pin
   return (avg / ADC_RESOLUTION) * ADC_VREF;
 }
 
@@ -26,29 +36,26 @@ void initVoltage() {
   if (initialized) return;
 
   pinMode(VOLTAGE_PACK_PIN, INPUT);
-  analogSetAttenuation(ADC_11db);
 
-  calibrateVoltage();
+  // CRITICAL for ESP32 ADC accuracy
+  analogSetPinAttenuation(VOLTAGE_PACK_PIN, ADC_11db);
+
   initialized = true;
-
   Serial.println("[VOLTAGE] Pack voltage monitoring initialized");
 }
 
 void calibrateVoltage() {
-  // For direct voltage sensor modules,
-  // calibration is usually a single scale factor.
-  // Adjust VOLTAGE_SENSOR_MAX_VOLTAGE in config.h if needed.
-  Serial.println("[VOLTAGE] Calibration using module scale factor");
+  // Calibration is handled by VOLTAGE_CORR
+  Serial.println("[VOLTAGE] Using calibrated divider + correction");
 }
 
 float readPackVoltage() {
   if (!initialized) initVoltage();
 
-  float adcVoltage = readADCVoltage();
+  float v_adc = readADCVoltage();
 
-  // Direct sensor scaling
-  float packVoltage =
-    (adcVoltage / ADC_VREF) * VOLTAGE_SENSOR_MAX_VOLTAGE;
+  // Correct, real-world scaling
+  float packVoltage = v_adc * VOLTAGE_DIVIDER * VOLTAGE_CORR;
 
   return packVoltage;
 }
@@ -60,7 +67,8 @@ float readVoltage() {
 bool voltageSystemHealthy() {
   float v = readPackVoltage();
 
-  if (v < 1.0 || v > VOLTAGE_SENSOR_MAX_VOLTAGE * 1.1) {
+  // 3S sanity check (very wide on purpose)
+  if (v < 5.0 || v > 15.0) {
     Serial.println("[VOLTAGE] Error: Voltage out of expected range");
     return false;
   }

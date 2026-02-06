@@ -10,6 +10,8 @@ static unsigned long lastUpdate = 0;
 
 void lcdInit() {
   Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setClock(100000);   // important for MPU6050 clones
+
 
   lcd.begin(16, 2);
   lcd.backlight();
