@@ -1,8 +1,6 @@
 #pragma once
 #include <Arduino.h>
 
-/* ================= Current Monitoring ================= */
-
 enum CurrentDirection {
   CURRENT_IDLE = 0,
   CURRENT_CHARGING,
@@ -10,23 +8,21 @@ enum CurrentDirection {
 };
 
 struct CurrentData {
-  float current;               // Absolute current in Amps
-  CurrentDirection direction;  // Set by MAIN logic (relay-based)
+  float current;               
+  CurrentDirection direction;  
   float powerWatts;
 
-  bool overCurrent;            // Instant overcurrent (USED by fault manager)
-  bool overcurrentWarning;     // Reserved (future use)
-  bool overcurrentFault;       // Reserved (future use)
+  bool overCurrent;
+  bool overcurrentWarning;
+  bool overcurrentFault;
 };
 
 /* ================= API ================= */
 
 void initCurrent();
-void calibrateCurrent();
-
-float readCurrent();
 CurrentData readCurrentData();
 
+float readCurrent();
 float calculatePower(float current, float voltage);
 
 float getPeakCurrent();

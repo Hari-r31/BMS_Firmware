@@ -3,6 +3,15 @@
 #include "gsm_sms.h"
 #include "nvs_logger.h"
 #include <string.h>
+#include <math.h>
+
+/* ================= Relay Config ================= */
+
+#define LOAD_RELAY_PIN 33
+
+// ⚠️ Change if your relay is active LOW
+#define RELAY_ON  HIGH
+#define RELAY_OFF LOW
 
 /* ================= State ================= */
 
@@ -10,7 +19,6 @@ static FaultData currentFault;
 static EdgeAnalytics analytics;
 static bool initialized = false;
 
-// 32-bit bitmap (supports 32 faults)
 static uint32_t faultBitmap = 0;
 
 /* ================= Edge Windows ================= */
@@ -43,6 +51,14 @@ static uint8_t max8(uint8_t a, uint8_t b) {
   return (a > b) ? a : b;
 }
 
+static void cutMotor() {
+  digitalWrite(LOAD_RELAY_PIN, RELAY_OFF);
+}
+
+static void allowMotor() {
+  digitalWrite(LOAD_RELAY_PIN, RELAY_ON);
+}
+
 /* ================= Init ================= */
 
 void initFaultManager() {
@@ -51,6 +67,9 @@ void initFaultManager() {
   memset(&currentFault, 0, sizeof(currentFault));
   strcpy(currentFault.faultMessage, "NONE");
   currentFault.primaryFault = FAULT_NONE;
+
+  pinMode(LOAD_RELAY_PIN, OUTPUT);
+  allowMotor();  // motor allowed at startup
 
   initialized = true;
   Serial.println("[FAULT] Manager initialized");
@@ -106,13 +125,13 @@ void evaluateSystemFaults(
     if (current < 0) {
       if (!isBitSet(FAULT_OVER_CURRENT_CHARGE)) currentFault.faultCount++;
       setFaultBit(FAULT_OVER_CURRENT_CHARGE);
-      currentFault.primaryFault = FAULT_OVER_CURRENT_CHARGE;
       strcpy(currentFault.faultMessage, "OVER CURRENT CHARGE");
+      currentFault.primaryFault = FAULT_OVER_CURRENT_CHARGE;
     } else {
       if (!isBitSet(FAULT_OVER_CURRENT_DISCHARGE)) currentFault.faultCount++;
       setFaultBit(FAULT_OVER_CURRENT_DISCHARGE);
-      currentFault.primaryFault = FAULT_OVER_CURRENT_DISCHARGE;
       strcpy(currentFault.faultMessage, "OVER CURRENT DISCHARGE");
+      currentFault.primaryFault = FAULT_OVER_CURRENT_DISCHARGE;
     }
     currentFault.severity = 4;
     newFault = true;
@@ -148,9 +167,12 @@ void evaluateSystemFaults(
 
   /* ---- Finalize ---- */
   if (newFault && !currentFault.latched) {
+    cutMotor();   // 🔴 HARD CUT
+
     currentFault.active = true;
     currentFault.latched = true;
     currentFault.faultTimestamp = millis();
+
     incrementFaultCount();
     gsmSendSMS("BMS FAULT DETECTED");
   }
@@ -183,6 +205,14 @@ void clearFaults() {
   strcpy(currentFault.faultMessage, "NONE");
   currentFault.primaryFault = FAULT_NONE;
   faultBitmap = 0;
+
+  allowMotor();   // restore motor only after manual clear
+}
+
+/* ================= Motor Permission ================= */
+
+bool shouldAllowMotor() {
+  return !currentFault.latched;
 }
 
 /* ================= Edge Analytics ================= */
@@ -218,10 +248,13 @@ EdgeAnalytics getEdgeAnalytics() {
 
 void triggerExternalFault(FaultType type, const char* message) {
   setFaultBit(type);
+
   currentFault.active = true;
   currentFault.latched = true;
   currentFault.primaryFault = type;
   strncpy(currentFault.faultMessage, message, sizeof(currentFault.faultMessage) - 1);
   currentFault.severity = 3;
+
+  cutMotor();  // 🔴 external faults also cut motor
   incrementFaultCount();
 }

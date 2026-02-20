@@ -66,7 +66,12 @@ FaultData getFaultData();
 uint8_t getFaultSeverity();
 void clearFaults();
 
+/* Motor Permission */
+bool shouldAllowMotor();
+
+/* Edge Analytics */
 EdgeAnalytics performEdgeAnalytics(float voltage, float current, float temp);
 EdgeAnalytics getEdgeAnalytics();
 
+/* External Fault */
 void triggerExternalFault(FaultType type, const char* message);

@@ -35,29 +35,26 @@ static const char* SUPABASE_KEY =
    ========================================================= */
 // Sensors
 #define VOLTAGE_PACK_PIN 34
-#define CURRENT_PIN 35
 #define TEMP_PACK_PIN 4
 
-// Accelerometer
-#define ACCEL_INT_PIN 23
 
 // Relays
 #define CHARGE_RELAY_PIN 25
-#define MOTOR_RELAY_PIN 26
-#define FAN_RELAY_PIN 27
+#define LOAD_MOTOR_RELAY_PIN 33
+#define COOLING_FAN_RELAY_PIN 27
 
 /* =========================================================
    SYSTEM
    ========================================================= */
 #define DEVICE_ID "BMS_EV_001"
-#define FIRMWARE_VERSION "2.0.0"
+#define FIRMWARE_VERSION "1.0.0"
 
 /* =========================================================
    BATTERY CONFIGURATION
    ========================================================= */
 #define NUM_CELLS 3
 #define NUM_PACKS 1
-#define NOMINAL_CELL_VOLTAGE 3.7
+#define NOMINAL_CELL_VOLTAGE 3.75
 #define CELL_CAPACITY_AH 50.0
 #define INITIAL_CAPACITY_AH CELL_CAPACITY_AH
 

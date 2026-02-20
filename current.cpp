@@ -1,105 +1,66 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include <Adafruit_INA219.h>
 #include "current.h"
 #include "config.h"
 
 /* ================= Private ================= */
 
+static Adafruit_INA219 ina219;
 static bool initialized = false;
-static float zeroVoltage = CURRENT_SENSOR_VREF;
 static float peakCurrent = 0.0;
-static unsigned long overcurrentStartTime = 0;
-static bool overcurrentActive = false;
 
-static const float SENSITIVITY = CURRENT_SENSOR_MV_PER_A / 1000.0;
-static const float DEAD_BAND = 0.15;
-
-/* ================= ADC ================= */
-
-static float readADCVoltage() {
-  uint32_t sum = 0;
-
-  for (int i = 0; i < ADC_SAMPLES; i++) {
-    sum += analogRead(CURRENT_PIN);
-    delayMicroseconds(80);
-  }
-
-  float avg = (float)sum / ADC_SAMPLES;
-  return (avg / ADC_RESOLUTION) * ADC_VREF;
-}
-
-static float voltageToCurrent(float voltage) {
-  return fabs((voltage - zeroVoltage) / SENSITIVITY);
-}
-
-/* ================= Public ================= */
+/* ================= Init ================= */
 
 void initCurrent() {
   if (initialized) return;
 
-  pinMode(CURRENT_PIN, INPUT);
-  analogSetAttenuation(ADC_11db);
+  if (!ina219.begin()) {
+    Serial.println("[INA219] Not detected!");
+    while (1);
+  }
 
-  Serial.println("[CURRENT] Initializing...");
-  calibrateCurrent();
-
+  Serial.println("[INA219] Initialized");
   initialized = true;
 }
 
-void calibrateCurrent() {
-  Serial.println("[CURRENT] Calibrating (NO LOAD)...");
-
-  uint32_t sum = 0;
-  const int samples = 1000;
-
-  for (int i = 0; i < samples; i++) {
-    sum += analogRead(CURRENT_PIN);
-    delayMicroseconds(200);
-  }
-
-  float avg = (float)sum / samples;
-  zeroVoltage = (avg / ADC_RESOLUTION) * ADC_VREF;
-
-  if (zeroVoltage < 2.0 || zeroVoltage > 3.0) {
-    Serial.println("[CURRENT] Calibration out of range, using default 2.5V");
-    zeroVoltage = CURRENT_SENSOR_VREF;
-  }
-
-  Serial.print("[CURRENT] Zero voltage = ");
-  Serial.print(zeroVoltage, 4);
-  Serial.println(" V");
-}
+/* ================= Read ================= */
 
 float readCurrent() {
   if (!initialized) initCurrent();
 
-  float voltage = readADCVoltage();
-  float current = voltageToCurrent(voltage);
+  float current_mA = ina219.getCurrent_mA();
+  float current_A = current_mA / 1000.0;
 
-  if (current < DEAD_BAND) current = 0.0;
-  return current;
+  if (fabs(current_A) > peakCurrent) {
+    peakCurrent = fabs(current_A);
+  }
+
+  return current_A;
 }
 
 CurrentData readCurrentData() {
   CurrentData data = {};
 
   data.current = readCurrent();
-  data.direction = CURRENT_IDLE;   // MUST be set by main logic
-  data.powerWatts = 0.0;
+  if (data.current > 0.2)
+    data.direction = CURRENT_DISCHARGING;
+  else if (data.current < -0.2)
+    data.direction = CURRENT_CHARGING;
+  else
+    data.direction = CURRENT_IDLE;
 
-  // Instant overcurrent (direction-aware)
+  float power_mW = ina219.getPower_mW();
+  data.powerWatts = power_mW / 1000.0;
+
   data.overCurrent = checkOvercurrent(data.current, data.direction);
-
-  // Reserved flags (not used yet)
   data.overcurrentWarning = false;
   data.overcurrentFault = false;
-
-  if (data.current > peakCurrent) {
-    peakCurrent = data.current;
-  }
 
   return data;
 }
 
+/* ================= Utilities ================= */
 
 float calculatePower(float current, float voltage) {
   return current * voltage;
@@ -115,10 +76,10 @@ void resetPeakCurrent() {
 
 bool checkOvercurrent(float current, CurrentDirection direction) {
   if (direction == CURRENT_CHARGING) {
-    return current > MAX_CHARGE_CURRENT;
+    return fabs(current) > MAX_CHARGE_CURRENT;
   }
   if (direction == CURRENT_DISCHARGING) {
-    return current > MAX_DISCHARGE_CURRENT;
+    return fabs(current) > MAX_DISCHARGE_CURRENT;
   }
   return false;
 }
@@ -126,13 +87,8 @@ bool checkOvercurrent(float current, CurrentDirection direction) {
 bool currentSensorHealthy() {
   float current = readCurrent();
 
-  if (current > 40.0) {
-    Serial.println("[CURRENT] Sensor out of range");
-    return false;
-  }
-
-  if (zeroVoltage < 2.0 || zeroVoltage > 3.0) {
-    Serial.println("[CURRENT] Zero drift detected");
+  if (fabs(current) > 50.0) {  // sanity limit
+    Serial.println("[INA219] Sensor out of range");
     return false;
   }
 
