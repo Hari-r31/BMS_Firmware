@@ -2,80 +2,128 @@
 #include "config.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <NetworkClientSecure.h>   // ESP32 core 3.x (replaces WiFiClientSecure)
 
-/* ================= Configuration ================= */
-
-// Telegram Bot API URL base
-static const char* TELEGRAM_API_BASE = "https://api.telegram.org/bot";
-
-/* ================= State ================= */
-
-static bool initialized = false;
+static bool          initialized      = false;
 static unsigned long lastTelegramTime = 0;
+static bool          neverSent        = true;  // first message always bypasses cooldown
 
-// Prevent spamming
-#define TELEGRAM_COOLDOWN_MS 30000  // 30 seconds
+#define TELEGRAM_COOLDOWN_MS  30000UL   // 30 s minimum between messages
 
-/* ================= Public Functions ================= */
+/* ═══════════════════════════════════════════
+   INIT
+   ═══════════════════════════════════════════ */
 
 void telegramInit() {
   if (initialized) return;
 
-  Serial.println("[TELEGRAM] Initializing Telegram module...");
-
-  if (strlen(TELEGRAM_BOT_TOKEN) == 0 || strlen(TELEGRAM_CHAT_ID) == 0) {
-    Serial.println("[TELEGRAM] ❌ Bot token or chat ID missing");
+  if (!TELEGRAM_BOT_TOKEN[0] || !TELEGRAM_CHAT_ID[0]) {
+    Serial.println("[TELEGRAM] ERROR: Token or Chat ID missing in config.h");
     return;
   }
 
+  /* Set lastTelegramTime far enough in the past so cooldown is already
+     expired the moment the first sendTelegramAlert() is called. */
+  lastTelegramTime = 0;
+  neverSent        = true;
+
   initialized = true;
-  Serial.println("[TELEGRAM] ✓ Telegram ready");
+  Serial.println("[TELEGRAM] Ready");
 }
 
-bool sendTelegramAlert(const String& message) {
-  if (!initialized) telegramInit();
+/* ═══════════════════════════════════════════
+   INTERNAL SEND  (shared by both public functions)
+   ═══════════════════════════════════════════ */
 
-  // Rate limit
-  if (millis() - lastTelegramTime < TELEGRAM_COOLDOWN_MS) {
-    Serial.println("[TELEGRAM] Cooldown active, message skipped");
-    return false;
+static bool doSend(const String& message) {
+  /* Wait up to 5 s for WiFi (handles messages sent right after boot) */
+  unsigned long wifiWait = millis();
+  while (WiFi.status() != WL_CONNECTED && millis() - wifiWait < 5000) {
+    delay(200);
   }
 
   if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[TELEGRAM] WiFi not connected");
+    Serial.println("[TELEGRAM] WiFi not connected – skipped");
     return false;
   }
+
+  String url = String("https://api.telegram.org/bot") +
+               TELEGRAM_BOT_TOKEN + "/sendMessage";
+
+  /* Escape characters that break JSON */
+  String escaped = message;
+  escaped.replace("\\", "\\\\");
+  escaped.replace("\"", "\\\"");
+  escaped.replace("\n", "\\n");
+  escaped.replace("\r", "");
+
+  /* Plain text – NO parse_mode (avoids Markdown/HTML rejection) */
+  String payload =
+    "{\"chat_id\":\"" + String(TELEGRAM_CHAT_ID) + "\","
+    "\"text\":\""    + escaped + "\"}";
+
+  NetworkClientSecure client;
+  client.setInsecure();
+  client.setTimeout(8);
 
   HTTPClient http;
   http.setTimeout(8000);
 
-  // Build URL
-  String url = String(TELEGRAM_API_BASE) +
-               TELEGRAM_BOT_TOKEN +
-               "/sendMessage";
-
-  http.begin(url);
-  http.addHeader("Content-Type", "application/json");
-
-  // JSON payload
-  String payload =
-    "{"
-    "\"chat_id\":\"" + String(TELEGRAM_CHAT_ID) + "\","
-    "\"text\":\"" + message + "\","
-    "\"parse_mode\":\"Markdown\""
-    "}";
-
-  int httpCode = http.POST(payload);
-
-  if (httpCode >= 200 && httpCode < 300) {
-    Serial.println("[TELEGRAM] ✓ Alert sent");
-    lastTelegramTime = millis();
-    http.end();
-    return true;
-  } else {
-    Serial.print("[TELEGRAM] ❌ Failed, code: ");
-    Serial.println(httpCode);
-    http.end();
+  if (!http.begin(client, url)) {
+    Serial.println("[TELEGRAM] http.begin failed");
     return false;
   }
+
+  http.addHeader("Content-Type", "application/json");
+
+  int    code     = http.POST(payload);
+  String response = http.getString();
+  http.end();
+
+  if (code >= 200 && code < 300) {
+    lastTelegramTime = millis();
+    neverSent        = false;
+    Serial.println("[TELEGRAM] Alert sent OK");
+    return true;
+  }
+
+  Serial.printf("[TELEGRAM] Failed  HTTP=%d  body=%s\n", code, response.c_str());
+  return false;
+}
+
+/* ═══════════════════════════════════════════
+   PUBLIC – NORMAL SEND  (respects cooldown)
+   ═══════════════════════════════════════════ */
+
+bool sendTelegramAlert(const String& message) {
+  if (!initialized) telegramInit();
+  if (!initialized) return false;
+
+  /* First message ever: always send regardless of cooldown */
+  if (neverSent) {
+    Serial.println("[TELEGRAM] First message – bypassing cooldown");
+    return doSend(message);
+  }
+
+  if ((millis() - lastTelegramTime) < TELEGRAM_COOLDOWN_MS) {
+    Serial.printf("[TELEGRAM] Cooldown (%lus left) – skipped\n",
+                  (TELEGRAM_COOLDOWN_MS - (millis() - lastTelegramTime)) / 1000);
+    return false;
+  }
+
+  return doSend(message);
+}
+
+/* ═══════════════════════════════════════════
+   PUBLIC – FORCED SEND  (bypasses cooldown)
+   Use for critical one-time events:
+     boot alert, fault latch, thermal trip, charging start/stop
+   ═══════════════════════════════════════════ */
+
+bool sendTelegramForced(const String& message) {
+  if (!initialized) telegramInit();
+  if (!initialized) return false;
+
+  Serial.println("[TELEGRAM] Forced send – ignoring cooldown");
+  return doSend(message);
 }

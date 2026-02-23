@@ -14,6 +14,7 @@ void uploadComprehensiveTelemetry(
   float current,
   float power,
   float tempPack,
+  float soc,
   float soh,
   int rulCycles,
   bool fault,

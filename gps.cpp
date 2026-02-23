@@ -6,71 +6,60 @@
 
 /* ================= Private ================= */
 
-static TinyGPSPlus gps;
-static HardwareSerial gpsSerial(1);
-static bool initialized = false;
+static TinyGPSPlus      gps;
+static HardwareSerial   gpsSerial(1);   // UART1
+static bool             initialized = false;
+static GPSData          currentData;
 
-static GPSData currentData;
+static bool  geofenceEnabled = GEOFENCE_ENABLED;
+static float homeLat         = GEOFENCE_LAT;
+static float homeLon         = GEOFENCE_LON;
 
-static bool geofenceEnabled = GEOFENCE_ENABLED;
-static float homeLat = GEOFENCE_LAT;
-static float homeLon = GEOFENCE_LON;
+#define EARTH_RADIUS_M 6371000.0f
 
-#define EARTH_RADIUS_M 6371000.0
-
-static float toRadians(float deg) {
-  return deg * PI / 180.0;
-}
+static float toRadians(float deg) { return deg * (float)M_PI / 180.0f; }
 
 /* ================= Init ================= */
 
 void initGPS() {
-#if ENABLE_GPS
   if (initialized) return;
 
+  /* GPS_RX / GPS_TX defined in config.h */
   gpsSerial.begin(GPS_BAUD, SERIAL_8N1, GPS_RX, GPS_TX);
 
   memset(&currentData, 0, sizeof(currentData));
   initialized = true;
 
-  Serial.println("[GPS] Initialized");
-#endif
+  Serial.println("[GPS] Initialized (UART1)");
 }
 
-/* ================= Update ================= */
+/* ================= Update – call every loop ================= */
 
 void updateGPS() {
   if (!initialized) return;
 
-  while (gpsSerial.available()) {
+  while (gpsSerial.available())
     gps.encode(gpsSerial.read());
-  }
 
   if (gps.location.isValid()) {
-    currentData.valid = true;
-    currentData.latitude = gps.location.lat();
-    currentData.longitude = gps.location.lng();
+    currentData.valid     = true;
+    currentData.latitude  = (float)gps.location.lat();
+    currentData.longitude = (float)gps.location.lng();
 
     if (gps.altitude.isValid())
-      currentData.altitude = gps.altitude.meters();
+      currentData.altitude = (float)gps.altitude.meters();
 
     if (gps.speed.isValid())
-      currentData.speed = gps.speed.kmph();
+      currentData.speed = (float)gps.speed.kmph();
 
     if (gps.satellites.isValid())
-      currentData.satellites = gps.satellites.value();
+      currentData.satellites = (uint8_t)gps.satellites.value();
 
     if (geofenceEnabled) {
-      currentData.distanceFromHome =
-        calculateDistance(
-          currentData.latitude,
-          currentData.longitude,
-          homeLat,
-          homeLon
-        );
-
+      currentData.distanceFromHome = calculateDistance(
+        currentData.latitude, currentData.longitude, homeLat, homeLon);
       currentData.geofenceViolation =
-        currentData.distanceFromHome > GEOFENCE_RADIUS_M;
+        (currentData.distanceFromHome > GEOFENCE_RADIUS_M);
     }
   } else {
     currentData.valid = false;
@@ -79,72 +68,39 @@ void updateGPS() {
 
 /* ================= Getters ================= */
 
-GPSData getGPSData() {
-  return currentData;
-}
+GPSData getGPSData()         { return currentData; }
+bool    hasGPSFix()          { return currentData.valid && currentData.satellites >= 3; }
+bool    isGeofenceViolated() { return geofenceEnabled && currentData.geofenceViolation; }
+bool    gpsHealthy()         { return hasGPSFix(); }
 
-bool hasGPSFix() {
-  return currentData.valid && currentData.satellites >= 3;
-}
+float gpsGetLatitude()  { return currentData.valid ? currentData.latitude  : 0.0f; }
+float gpsGetLongitude() { return currentData.valid ? currentData.longitude : 0.0f; }
 
-bool isGeofenceViolated() {
-  return geofenceEnabled && currentData.geofenceViolation;
-}
+/* ================= Geofence control ================= */
 
-bool gpsHealthy() {
-  return hasGPSFix();
-}
+void setGeofenceEnabled(bool enable)       { geofenceEnabled = enable; }
+void setHomeLocation(float lat, float lon) { homeLat = lat; homeLon = lon; }
 
-/* ================= Distance ================= */
+/* ================= Haversine distance (metres) ================= */
 
 float calculateDistance(float lat1, float lon1, float lat2, float lon2) {
   float dLat = toRadians(lat2 - lat1);
   float dLon = toRadians(lon2 - lon1);
 
-  float a =
-    sin(dLat / 2) * sin(dLat / 2) +
-    cos(toRadians(lat1)) * cos(toRadians(lat2)) *
-    sin(dLon / 2) * sin(dLon / 2);
+  float a = sinf(dLat / 2.0f) * sinf(dLat / 2.0f) +
+            cosf(toRadians(lat1)) * cosf(toRadians(lat2)) *
+            sinf(dLon / 2.0f) * sinf(dLon / 2.0f);
 
-  return EARTH_RADIUS_M * 2 * atan2(sqrt(a), sqrt(1 - a));
+  return EARTH_RADIUS_M * 2.0f * atan2f(sqrtf(a), sqrtf(1.0f - a));
 }
 
 /* ================= Formatting ================= */
 
 void getGPSLocationString(char* buffer, size_t size) {
-  if (currentData.valid) {
-    snprintf(
-      buffer, size,
-      "Lat:%.6f Lon:%.6f Spd:%.1fkm/h Sat:%d",
-      currentData.latitude,
-      currentData.longitude,
-      currentData.speed,
-      currentData.satellites
-    );
-  } else {
+  if (currentData.valid)
+    snprintf(buffer, size, "Lat:%.6f Lon:%.6f Spd:%.1fkm/h Sat:%u",
+             currentData.latitude, currentData.longitude,
+             currentData.speed, currentData.satellites);
+  else
     snprintf(buffer, size, "GPS: NO FIX");
-  }
-}
-
-/* ================= GeoFence ================= */
-
-void setGeofenceEnabled(bool enable) {
-  geofenceEnabled = enable;
-}
-
-void setHomeLocation(float lat, float lon) {
-  homeLat = lat;
-  homeLon = lon;
-}
-
-/* ================= LEGACY WRAPPERS ================= */
-
-// 🔧 THESE FIX YOUR COMPILATION ERROR
-
-float gpsGetLatitude() {
-  return currentData.valid ? currentData.latitude : 0.0;
-}
-
-float gpsGetLongitude() {
-  return currentData.valid ? currentData.longitude : 0.0;
 }

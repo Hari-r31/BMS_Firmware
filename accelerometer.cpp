@@ -4,33 +4,32 @@
 #include <math.h>
 #include <string.h>
 
-/* ================= MPU6050 RAW REGISTERS ================= */
+/* ================= MPU6050 Registers ================= */
 
-#define MPU_ADDR           0x68
-#define REG_PWR_MGMT_1     0x6B
-#define REG_ACCEL_XOUT_H   0x3B
+#define MPU_ADDR          0x68
+#define REG_PWR_MGMT_1    0x6B
+#define REG_ACCEL_XOUT_H  0x3B
 
 /* ================= Detection Thresholds ================= */
 
-// RELAXED + REALISTIC (MPU6050 clone friendly)
-#define FREE_FALL_G          0.75
-#define IMPACT_G             2.5
-#define SHOCK_G              4.0
+#define FREE_FALL_G       0.30f   // magnitude < this → free fall candidate
+#define IMPACT_G          2.50f   // magnitude > this after free fall → impact
+#define SHOCK_G           4.00f   // magnitude > this any time → direct shock
 
-#define IMPACT_WINDOW_MS     250     // ESP32-safe
-#define FREE_FALL_SAMPLES    3       // debounce (≈30 ms @100 Hz)
+#define IMPACT_WINDOW_MS  250     // max ms between free-fall end and impact
+#define FREE_FALL_SAMPLES 3       // consecutive samples required (~30 ms @100 Hz)
 
 /* ================= Private State ================= */
 
-static bool initialized = false;
+static bool     initialized   = false;
 static AccelData currentData;
 
-static bool inFreeFall = false;
+static bool     inFreeFall    = false;
 static unsigned long freeFallTime = 0;
-static uint8_t freeFallCount = 0;
+static uint8_t  freeFallCount = 0;
 
-static uint32_t impactCount = 0;
-static uint32_t shockCount  = 0;
+static uint32_t impactCount   = 0;
+static uint32_t shockCount    = 0;
 
 /* ================= Low-level I2C ================= */
 
@@ -46,46 +45,42 @@ static int16_t read16(uint8_t reg) {
   Wire.write(reg);
   Wire.endTransmission(false);
   Wire.requestFrom(MPU_ADDR, (uint8_t)2);
-  return (Wire.read() << 8) | Wire.read();
+  return (int16_t)((Wire.read() << 8) | Wire.read());
 }
 
 /* ================= Init ================= */
 
 void initAccelerometer() {
-#if ENABLE_IMPACT_DETECTION
   if (initialized) return;
 
-  Serial.println("[ACCEL] Initializing RAW MPU6050");
+  Serial.println("[ACCEL] Initializing MPU6050");
 
   Wire.begin(ACCEL_SDA, ACCEL_SCL);
   Wire.setClock(400000);
 
-  writeReg(REG_PWR_MGMT_1, 0x00); // Wake up
+  writeReg(REG_PWR_MGMT_1, 0x00);  // wake up, use internal 8 MHz oscillator
   delay(100);
 
   memset(&currentData, 0, sizeof(currentData));
   initialized = true;
 
-  Serial.println("[ACCEL] RAW MPU6050 ready");
-#endif
+  Serial.println("[ACCEL] MPU6050 ready");
 }
 
-/* ================= Read ================= */
+/* ================= Read (single authoritative call) ================= */
 
 AccelData readAccelerometer() {
   if (!initialized) initAccelerometer();
-  if (!initialized) return currentData;
 
+  /* --- Raw ADC → g  (±2g range → 16384 LSB/g) --- */
   int16_t ax = read16(REG_ACCEL_XOUT_H);
   int16_t ay = read16(REG_ACCEL_XOUT_H + 2);
   int16_t az = read16(REG_ACCEL_XOUT_H + 4);
 
-  // ±2g → 16384 LSB/g
-  currentData.accelX = ax / 16384.0;
-  currentData.accelY = ay / 16384.0;
-  currentData.accelZ = az / 16384.0;
-
-  currentData.magnitude = sqrt(
+  currentData.accelX    = ax / 16384.0f;
+  currentData.accelY    = ay / 16384.0f;
+  currentData.accelZ    = az / 16384.0f;
+  currentData.magnitude = sqrtf(
     currentData.accelX * currentData.accelX +
     currentData.accelY * currentData.accelY +
     currentData.accelZ * currentData.accelZ
@@ -93,56 +88,51 @@ AccelData readAccelerometer() {
 
   unsigned long now = millis();
 
-  /* ================= FREE FALL (DEBOUNCED) ================= */
+  /* ── Reset per-call event flags ── */
+  currentData.freeFallDetected = false;
+  currentData.impactDetected   = false;
+  currentData.shockDetected    = false;
 
+  /* ── FREE FALL (debounced) ── */
   if (currentData.magnitude < FREE_FALL_G) {
-    if (freeFallCount < FREE_FALL_SAMPLES)
-      freeFallCount++;
+    if (freeFallCount < FREE_FALL_SAMPLES) freeFallCount++;
 
     if (freeFallCount >= FREE_FALL_SAMPLES && !inFreeFall) {
-      inFreeFall = true;
+      inFreeFall   = true;
       freeFallTime = now;
       currentData.freeFallDetected = true;
-      Serial.println("[ACCEL] 🟦 FREE FALL");
+      Serial.println("[ACCEL] FREE FALL detected");
     }
   } else {
     freeFallCount = 0;
-    currentData.freeFallDetected = false;
   }
 
-  /* ================= IMPACT (AFTER FREE FALL) ================= */
-
+  /* ── IMPACT (free-fall → sudden deceleration) ── */
   if (inFreeFall &&
       currentData.magnitude > IMPACT_G &&
       (now - freeFallTime) <= IMPACT_WINDOW_MS) {
 
     currentData.impactDetected = true;
     impactCount++;
-    inFreeFall = false;
+    inFreeFall    = false;
     freeFallCount = 0;
-
-    Serial.println("[ACCEL] ⚠️ IMPACT");
-  } else {
-    currentData.impactDetected = false;
+    Serial.printf("[ACCEL] IMPACT detected (mag=%.2fg, total=%u)\n",
+                  currentData.magnitude, impactCount);
   }
 
-  /* ================= SHOCK (ANYTIME) ================= */
-
+  /* ── SHOCK (high-g any time) ── */
   if (currentData.magnitude > SHOCK_G) {
     currentData.shockDetected = true;
     shockCount++;
-    inFreeFall = false;
+    inFreeFall    = false;
     freeFallCount = 0;
-
-    Serial.println("[ACCEL] 🚨 SHOCK");
-  } else {
-    currentData.shockDetected = false;
+    Serial.printf("[ACCEL] SHOCK detected (mag=%.2fg, total=%u)\n",
+                  currentData.magnitude, shockCount);
   }
 
-  /* ================= TIMEOUT ================= */
-
+  /* ── Free-fall timeout (no impact arrived) ── */
   if (inFreeFall && (now - freeFallTime) > IMPACT_WINDOW_MS) {
-    inFreeFall = false;
+    inFreeFall    = false;
     freeFallCount = 0;
   }
 
@@ -152,38 +142,25 @@ AccelData readAccelerometer() {
   return currentData;
 }
 
-/* ================= Helpers ================= */
+/* ================= Utilities ================= */
 
 float getAccelMagnitude(float x, float y, float z) {
-  return sqrt(x*x + y*y + z*z);
+  return sqrtf(x * x + y * y + z * z);
 }
 
-bool checkImpact() {
-  return readAccelerometer().impactDetected;
-}
-
-bool checkShock() {
-  return readAccelerometer().shockDetected;
-}
-
-uint32_t getImpactCount() {
-  return impactCount;
-}
-
-uint32_t getShockCount() {
-  return shockCount;
-}
+uint32_t getImpactCount()  { return impactCount; }
+uint32_t getShockCount()   { return shockCount;  }
 
 void resetImpactCounters() {
   impactCount = 0;
-  shockCount = 0;
+  shockCount  = 0;
 }
 
 bool accelerometerHealthy() {
-  AccelData d = readAccelerometer();
-  return (d.magnitude > 0.4 && d.magnitude < 2.5);
+  /* A flat-stationary MPU6050 reads ~1 g due to gravity */
+  return (currentData.magnitude > 0.5f && currentData.magnitude < 2.0f);
 }
 
 float getTiltAngle(const AccelData& data) {
-  return acos(fabs(data.accelZ)) * 180.0 / PI;
+  return acosf(fabsf(data.accelZ)) * 180.0f / (float)M_PI;
 }

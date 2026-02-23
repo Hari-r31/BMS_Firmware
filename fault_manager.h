@@ -1,47 +1,46 @@
 #pragma once
-
 #include <Arduino.h>
 
 /* ================= Fault Types ================= */
 
 enum FaultType {
-  FAULT_NONE = 0,
-  FAULT_OVER_VOLTAGE = 1,
-  FAULT_UNDER_VOLTAGE = 2,
-  FAULT_OVER_CURRENT_CHARGE = 3,
-  FAULT_OVER_CURRENT_DISCHARGE = 4,
-  FAULT_OVER_TEMPERATURE = 5,
-  FAULT_UNDER_TEMPERATURE = 6,
-  FAULT_CELL_IMBALANCE = 7,
-  FAULT_SENSOR_FAILURE = 8,
-  FAULT_COMMUNICATION_LOSS = 9,
-  FAULT_GEOFENCE_VIOLATION = 10,
-  FAULT_IMPACT_DETECTED = 11,
-  FAULT_THERMAL_RUNAWAY = 12,
-  FAULT_BATTERY_AGING = 13
+  FAULT_NONE                  =  0,
+  FAULT_OVER_VOLTAGE          =  1,
+  FAULT_UNDER_VOLTAGE         =  2,
+  FAULT_OVER_CURRENT_CHARGE   =  3,
+  FAULT_OVER_CURRENT_DISCHARGE=  4,
+  FAULT_OVER_TEMPERATURE      =  5,
+  FAULT_UNDER_TEMPERATURE     =  6,
+  FAULT_CELL_IMBALANCE        =  7,
+  FAULT_SENSOR_FAILURE        =  8,
+  FAULT_COMMUNICATION_LOSS    =  9,
+  FAULT_GEOFENCE_VIOLATION    = 10,
+  FAULT_IMPACT_DETECTED       = 11,
+  FAULT_THERMAL_RUNAWAY       = 12,
+  FAULT_BATTERY_AGING         = 13
 };
 
 /* ================= Fault Data ================= */
 
 struct FaultData {
-  bool active;
-  FaultType primaryFault;
-  uint32_t faultCount;
-  bool latched;
-  char faultMessage[64];
+  bool          active;
+  FaultType     primaryFault;
+  uint32_t      faultCount;
+  bool          latched;
+  char          faultMessage[64];
   unsigned long faultTimestamp;
-  uint8_t severity;   // 0–4
+  uint8_t       severity;   // 0–4
 };
 
 /* ================= Edge Analytics ================= */
 
 struct EdgeAnalytics {
-  float voltageMovingAvg;
-  float currentMovingAvg;
-  float temperatureMovingAvg;
+  float   voltageMovingAvg;
+  float   currentMovingAvg;
+  float   temperatureMovingAvg;
   uint8_t anomalyScore;
-  bool anomalyDetected;
-  bool trendWarning;
+  bool    anomalyDetected;
+  bool    trendWarning;
 };
 
 /* ================= API ================= */
@@ -54,24 +53,41 @@ void evaluateSystemFaults(
   float cellMax,
   float cellImbalance,
   float current,
-  bool overcurrent,
+  bool  overcurrent,
   float tempMax,
   float tempMin
 );
 
-bool isFaulted();
-bool isFaultActive(FaultType type);
+bool        isFaulted();
+bool        isFaultActive(FaultType type);
 const char* faultReason();
-FaultData getFaultData();
-uint8_t getFaultSeverity();
-void clearFaults();
+FaultData   getFaultData();
+uint8_t     getFaultSeverity();
+void        clearFaults();
 
-/* Motor Permission */
+/**
+ * autoCheckFaultRecovery – call every loop with live sensor values.
+ *
+ * Recoverable faults (OV, UV, OC, OT, UT) are cleared automatically
+ * when their condition is no longer present.
+ * Non-recoverable faults (impact, geofence, thermal runaway, aging)
+ * remain latched until clearFaults() is called manually.
+ *
+ * When ALL active faults have cleared the motor relay is re-enabled.
+ */
+void autoCheckFaultRecovery(
+  float packVoltage,
+  float current,
+  bool  overcurrent,
+  float temperature
+);
+
+/* Motor permission */
 bool shouldAllowMotor();
 
-/* Edge Analytics */
+/* Edge analytics */
 EdgeAnalytics performEdgeAnalytics(float voltage, float current, float temp);
 EdgeAnalytics getEdgeAnalytics();
 
-/* External Fault */
+/* External fault injection (GPS violation, impact, etc.) */
 void triggerExternalFault(FaultType type, const char* message);

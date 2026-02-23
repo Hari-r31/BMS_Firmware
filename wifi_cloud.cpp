@@ -3,15 +3,13 @@
 #include "wifi_cloud.h"
 #include "config.h"
 
-/* ================= Private ================= */
-
-static unsigned long uploadCount = 0;
+static unsigned long uploadCount    = 0;
 static unsigned long lastUploadTime = 0;
 
 /* ================= WiFi ================= */
 
 void wifiInit() {
-  Serial.println("[WIFI] Initializing...");
+  Serial.println("[WIFI] Connecting...");
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);
   WiFi.begin(WIFI_SSID, WIFI_PASS);
@@ -30,41 +28,42 @@ void wifiEnsure() {
   }
 }
 
-bool wifiConnected() {
-  return WiFi.status() == WL_CONNECTED;
-}
+bool wifiConnected() { return WiFi.status() == WL_CONNECTED; }
 
-/* ================= Cloud ================= */
+/* ================= Cloud Upload ================= */
 
 void uploadComprehensiveTelemetry(
-  float packVoltage,
-  float current,
-  float power,
-  float tempPack,
-  float soh,
-  int rulCycles,
-  bool fault,
+  float       packVoltage,
+  float       current,
+  float       power,
+  float       tempPack,
+  float       soc,
+  float       soh,
+  int         rulCycles,
+  bool        fault,
   const char* faultMessage,
-  float latitude,
-  float longitude,
-  uint32_t impactCount,
-  uint32_t shockCount,
-  bool chargingActive,
-  bool fanActive,
-  bool chargerRelay,
-  bool motorRelay
+  float       latitude,
+  float       longitude,
+  uint32_t    impactCount,
+  uint32_t    shockCount,
+  bool        chargingActive,
+  bool        fanActive,
+  bool        chargerRelay,
+  bool        motorRelay
 ) {
-  if (millis() - lastUploadTime < CLOUD_UPLOAD_INTERVAL_MS) return;
-  if (!wifiConnected()) return;
+  if ((millis() - lastUploadTime) < CLOUD_UPLOAD_INTERVAL_MS) return;
+  if (!wifiConnected()) {
+    Serial.println("[CLOUD] WiFi not connected – skipping upload");
+    return;
+  }
 
   HTTPClient http;
   http.setTimeout(8000);
   http.begin(SUPABASE_URL);
-
-  http.addHeader("Content-Type", "application/json");
-  http.addHeader("apikey", SUPABASE_KEY);
+  http.addHeader("Content-Type",  "application/json");
+  http.addHeader("apikey",        SUPABASE_KEY);
   http.addHeader("Authorization", String("Bearer ") + SUPABASE_KEY);
-  http.addHeader("Prefer", "return=minimal");
+  http.addHeader("Prefer",        "return=minimal");
 
   char body[1024];
   snprintf(body, sizeof(body),
@@ -75,23 +74,22 @@ void uploadComprehensiveTelemetry(
       "\"current\":%.2f,"
       "\"power\":%.2f,"
       "\"temp_pack\":%.2f,"
+      "\"soc\":%.1f,"
       "\"soh\":%.2f,"
       "\"rul_cycles\":%d,"
       "\"fault\":%s,"
       "\"fault_message\":\"%s\","
       "\"latitude\":%.6f,"
       "\"longitude\":%.6f,"
-      "\"impact_count\":%lu,"
-      "\"shock_count\":%lu,"
+      "\"impact_count\":%u,"
+      "\"shock_count\":%u,"
       "\"connection_quality\":%u,"
-
       "\"is_charging\":%s,"
       "\"is_discharging\":%s,"
       "\"charger_relay_on\":%s,"
       "\"motor_load_on\":%s,"
       "\"fan_on\":%s,"
       "\"cooling_active\":%s"
-
     "}",
     DEVICE_ID,
     millis(),
@@ -99,45 +97,39 @@ void uploadComprehensiveTelemetry(
     current,
     power,
     tempPack,
+    soc,
     soh,
     rulCycles,
     fault ? "true" : "false",
     faultMessage ? faultMessage : "",
     latitude,
     longitude,
-    impactCount,
-    shockCount,
-    getConnectionQuality(),
-
-    chargingActive ? "true" : "false",
+    (unsigned int)impactCount,
+    (unsigned int)shockCount,
+    (unsigned int)getConnectionQuality(),
+    chargingActive ? "true"  : "false",
     chargingActive ? "false" : "true",
-    chargerRelay ? "true" : "false",
-    motorRelay ? "true" : "false",
-    fanActive ? "true" : "false",
-    fanActive ? "true" : "false"
+    chargerRelay   ? "true"  : "false",
+    motorRelay     ? "true"  : "false",
+    fanActive      ? "true"  : "false",
+    fanActive      ? "true"  : "false"
   );
 
   int code = http.POST((uint8_t*)body, strlen(body));
+  http.end();
 
   if (code >= 200 && code < 300) {
     uploadCount++;
     lastUploadTime = millis();
-    Serial.println("[CLOUD] ✓ Telemetry uploaded");
+    Serial.printf("[CLOUD] Uploaded #%lu\n", uploadCount);
   } else {
-    Serial.print("[CLOUD] ✗ Upload failed (");
-    Serial.print(code);
-    Serial.println(")");
-    Serial.println(body);
+    Serial.printf("[CLOUD] Upload failed (HTTP %d)\n", code);
   }
-
-  http.end();
 }
 
 /* ================= Status ================= */
 
-unsigned long getUploadCount() {
-  return uploadCount;
-}
+unsigned long getUploadCount() { return uploadCount; }
 
 uint8_t getConnectionQuality() {
   if (!wifiConnected()) return 0;

@@ -1,202 +1,244 @@
-/*  ╔══════════════════════════════════════════════════════════╗
- *  ║   Smart Battery Management System (BMS) for EV          ║
- *  ║   Firmware v2.1.0                                        ║
- *  ╚══════════════════════════════════════════════════════════╝
+/*
+ * ============================================================
+ *  EV Battery Management System – Main Firmware
+ *  Device : ESP32
+ *  Board  : esp32 by Espressif (Arduino core)
+ * ============================================================
  *
- *  System Operation Flow
- *  ─────────────────────
- *  1.  MCU boots → GPIO init → peripheral init
- *  2.  Sensor calibration (voltage offset, current zero, temp check)
- *  3.  Continuous sensing loop (100 ms):
- *        a.  Read pack voltage, current, temperature
- *        b.  Read accelerometer (100 Hz inner loop)
- *        c.  Update GPS
- *        d.  Edge processing (moving average + anomaly detection)
- *        e.  Battery intelligence (SOC, SOH, RUL)
- *        f.  Protection / fault evaluation
- *        g.  Relay control (charging interlock, motor, fan)
- *        h.  LCD update + serial telemetry
- *        i.  Cloud upload (rate-limited)
+ * REQUIRED LIBRARIES (install via Library Manager):
+ *   - Adafruit INA219            (current sensor)
+ *   - DHT sensor library         (temperature)
+ *   - TinyGPS++                  (GPS NMEA parser)
+ *   - hd44780                    (LCD I2C)
+ *   - Preferences                (ESP32 NVS – built-in)
+ * ============================================================
  */
 
-#include "system.h"
+#include <Arduino.h>
+
 #include "config.h"
+#include "system.h"
 #include "voltage.h"
 #include "current.h"
 #include "temperature.h"
 #include "fault_manager.h"
-#include "wifi_cloud.h"
-#include "lcd.h"
-#include "nvs_logger.h"
 #include "soc.h"
 #include "soh.h"
 #include "rul.h"
+#include "nvs_logger.h"
+#include "lcd.h"
+#include "wifi_cloud.h"
+
+#if ENABLE_GEOLOCATION
+  #include "gps.h"
+#endif
 
 #if ENABLE_IMPACT_DETECTION
   #include "accelerometer.h"
 #endif
 
-/* ═══════════════════════════════════════════
+/* ──────────────────────────────────────────────────────────────
+   TIMING
+   ────────────────────────────────────────────────────────────── */
+
+#define LOOP_INTERVAL_MS       100UL   // main loop cadence (100 ms)
+#define TELEMETRY_INTERVAL_MS 2000UL   // serial print cadence
+#define WATCHDOG_INTERVAL_MS 30000UL   // reboot if loop stalls
+
+static unsigned long lastLoopTime      = 0;
+static unsigned long lastTelemetryTime = 0;
+static unsigned long lastWatchdog      = 0;
+
+/* ──────────────────────────────────────────────────────────────
    SETUP
-   ═══════════════════════════════════════════ */
+   ────────────────────────────────────────────────────────────── */
 
 void setup() {
   Serial.begin(115200);
   delay(500);
 
-  /* ── 1. Banner ── */
   printSystemBanner();
 
-  /* ── 2. GPIO configuration (all outputs default LOW/safe) ── */
-  pinMode(CHARGE_RELAY_PIN, OUTPUT);
-  pinMode(MOTOR_RELAY_PIN,  OUTPUT);
-  pinMode(FAN_RELAY_PIN,    OUTPUT);
-
-  digitalWrite(CHARGE_RELAY_PIN, LOW);   // charging disabled
-  digitalWrite(MOTOR_RELAY_PIN,  LOW);   // motor disabled until init completes
-  digitalWrite(FAN_RELAY_PIN,    LOW);   // fan off
-
-  /* ── 3. LCD startup message ── */
-  lcdInit();
-
-  /* ── 4. Sensor initialisation & calibration ── */
-  Serial.println("[INIT] Voltage sensor...");
+  /* ── 1. Sensor calibration reads (voltage first – needed for SOC init) ── */
   initVoltage();
+  float bootVoltage = readPackVoltage();
+  Serial.printf("[BOOT] Pack voltage at startup: %.2f V\n", bootVoltage);
 
-  Serial.println("[INIT] Current sensor...");
-  initCurrent();        // includes zero-offset calibration (NO LOAD)
-
-  Serial.println("[INIT] Temperature sensor...");
+  initCurrent();
   initTemperature();
 
-  /* Read initial pack voltage for SOC seed */
-  float initVoltage_V = readPackVoltage();
-  Serial.printf("[INIT] Initial pack voltage: %.2f V\n", initVoltage_V);
+  /* ── 2. Initialize all subsystems ── */
+  initializeAllSystems(bootVoltage);
 
-  /* ── 5. All subsystems (WiFi, GSM, GPS, accel, NVS, SOC/SOH/RUL) ── */
-  initializeAllSystems(initVoltage_V);
-
-  /* ── 6. Diagnostics ── */
+  /* ── 3. Post-init diagnostics ── */
+  delay(1000);   // let GPS/GSM settle
   performSystemDiagnostics();
 
-  /* ── 7. Enable motor relay (load) – safe to run now ── */
-  digitalWrite(MOTOR_RELAY_PIN, HIGH);
-  Serial.println("[INIT] Motor relay ON (load enabled)");
+  lastLoopTime      = millis();
+  lastTelemetryTime = millis();
+  lastWatchdog      = millis();
 
-  Serial.println("=================================");
-  Serial.println("     BMS SYSTEM READY");
-  Serial.println("=================================");
+  Serial.println("[BOOT] Setup complete – entering monitoring loop\n");
 }
 
-/* ═══════════════════════════════════════════
-   MAIN LOOP
-   ═══════════════════════════════════════════ */
+/* ──────────────────────────────────────────────────────────────
+   MAIN LOOP  – runs every LOOP_INTERVAL_MS
+   ────────────────────────────────────────────────────────────── */
 
 void loop() {
-  static unsigned long lastLoopMs = 0;
-  static unsigned long lastAccelMs = 0;
 
   unsigned long now = millis();
-  unsigned long dtMs = now - lastLoopMs;
-  if (dtMs < SENSOR_READ_INTERVAL_MS) return;
-  lastLoopMs = now;
 
-  /* ── A. Accelerometer at 100 Hz (inner fast loop) ── */
-#if ENABLE_IMPACT_DETECTION
-  if (now - lastAccelMs >= 10) {
-    lastAccelMs = now;
-    readAccelerometer();
+  /* ── Enforce fixed loop cadence ── */
+  unsigned long elapsed = now - lastLoopTime;
+  if (elapsed < LOOP_INTERVAL_MS) {
+    delay(LOOP_INTERVAL_MS - elapsed);
+    return;
   }
-#endif
+  unsigned long dtMs = elapsed;   // actual elapsed (may be slightly > 100 ms)
+  lastLoopTime = millis();
 
-  /* ── B. WiFi keep-alive ── */
+  /* ── Watchdog pet ── */
+  lastWatchdog = millis();
+
+  /* ── WiFi keep-alive ── */
   wifiEnsure();
 
-  /* ── C. Sense: voltage, current, temperature ── */
-  float packVoltage = readPackVoltage();
-  CurrentData iData = readCurrentData();
-  float temperature = readPackTemperature();
+  /* ══════════════════════════════════════════════════════════
+     STEP 1 – CONTINUOUS SENSING
+     ══════════════════════════════════════════════════════════ */
 
-  /* Determine current direction from charge relay state */
-  iData.direction = digitalRead(CHARGE_RELAY_PIN)
-                    ? CURRENT_CHARGING
-                    : (iData.current > 0.5f ? CURRENT_DISCHARGING : CURRENT_IDLE);
+  float        packVoltage = readPackVoltage();
+  CurrentData  iData       = readCurrentData();
+  float        temperature = readPackTemperature();
 
-  /* Power calculation */
-  iData.powerWatts = calculatePower(iData.current, packVoltage);
+  /* For 3S pack, estimate per-cell values from pack voltage */
+  float cellAvg    = packVoltage / (float)NUM_CELLS;
+  float cellMin    = cellAvg;   // single sensor → treat avg as min/max
+  float cellMax    = cellAvg;
+  float cellImbal  = 0.0f;      // individual cell monitoring not wired – use 0
 
-  /* Overcurrent check (direction-aware) */
-  iData.overcurrentWarning = checkOvercurrent(iData.current, iData.direction);
+  /* ══════════════════════════════════════════════════════════
+     STEP 2 – EDGE PROCESSING (moving average + anomaly score)
+     ══════════════════════════════════════════════════════════ */
 
-  /* ── D. Edge processing (moving average + anomaly detection) ── */
-  EdgeAnalytics edge = performEdgeAnalytics(packVoltage, iData.current, temperature);
+  EdgeAnalytics edge = performEdgeAnalytics(packVoltage,
+                                            iData.current,
+                                            temperature);
 
-  if (edge.anomalyDetected) {
-    Serial.printf("[EDGE] ⚠ Anomaly score: %d\n", edge.anomalyScore);
-  }
+  if (edge.anomalyDetected)
+    Serial.printf("[EDGE] Anomaly score=%u – monitoring\n", edge.anomalyScore);
 
-  /* ── E. Battery intelligence (SOC, SOH, RUL) ── */
-  float signedCurrent =
-    (iData.direction == CURRENT_CHARGING)    ? -iData.current :
-    (iData.direction == CURRENT_DISCHARGING) ?  iData.current : 0.0f;
-
-  updateSystemHealth(signedCurrent, packVoltage, false,
-                     temperature, getCycleCount(), dtMs);
-
-  /* ── F. Fault evaluation ── */
-  evaluateSystemFaults(
-    packVoltage,
-    packVoltage / NUM_CELLS,   // approx cell min (single sensor)
-    packVoltage / NUM_CELLS,   // approx cell max
-    0.0f,                       // cell imbalance (N/A – single pack sensor)
-    iData.current,
-    iData.overcurrentWarning,
-    temperature,
-    temperature
-  );
+  /* ══════════════════════════════════════════════════════════
+     STEP 3 – BATTERY INTELLIGENCE  (SOC / SOH / RUL)
+     ══════════════════════════════════════════════════════════ */
 
   bool fault = isFaulted();
 
-  /* If newly faulted, send alerts */
-  static bool lastFaultState = false;
-  if (fault && !lastFaultState) {
-    Serial.printf("[FAULT] NEW FAULT: %s\n", faultReason());
+  updateSystemHealth(
+    iData.current,
+    packVoltage,
+    fault,
+    temperature,
+    getCycleCount(),
+    dtMs
+  );
 
-    char alertMsg[160];
-    snprintf(alertMsg, sizeof(alertMsg),
-             "🚨 BMS FAULT\nDevice: %s\nFault: %s\nVoltage: %.2fV\nTemp: %.1f°C",
-             DEVICE_ID, faultReason(), packVoltage, temperature);
-    sendTelegramAlert(String(alertMsg));
-    gsmSendSMS(alertMsg);
+  float soc = getSOC();
+
+  /* ══════════════════════════════════════════════════════════
+     STEP 4 – PROTECTION LOGIC
+     ══════════════════════════════════════════════════════════ */
+
+  /* ── Skip fault evaluation + current logic during motor inrush (500 ms) ── */
+  bool blanking = isMotorStartBlanking();
+  if (blanking) {
+    Serial.println("[BLANK] Motor inrush – skipping fault eval");
   }
-  lastFaultState = fault;
 
-  /* ── G. Relay control ── */
+  /* Electrical + thermal protection (skip during motor inrush) */
+  if (!blanking) {
+    evaluateSystemFaults(
+      packVoltage,
+      cellMin,
+      cellMax,
+      cellImbal,
+      iData.current,
+      iData.overCurrent,
+      temperature,   // tempMax
+      temperature    // tempMin  (single sensor)
+    );
+  }
 
-  /* 1. Charging relay + interlock */
-  controlCharging(packVoltage, fault);
-
-  /* 2. Motor / load relay (OFF during fault or charging) */
-  controlMotorRelay(fault, isChargingActive());
-
-  /* 3. Thermal management */
-  controlThermalManagement(temperature, fault);
-
-  /* ── H. External events (GPS geo-fence, impact) ── */
+  /* GPS / Impact external events */
   checkExternalEvents();
 
-  /* ── I. Displays ── */
-  float soc = getSOC();
-  float soh = getSOH();
-  int   rulMonths = (int)(estimateRULDays() / 30);
+  /* ── Auto-recover faults whose conditions have cleared ── */
+  if (!blanking) {
+    autoCheckFaultRecovery(
+      packVoltage,
+      iData.current,
+      iData.overCurrent,
+      temperature
+    );
+  }
 
-  lcdUpdate(packVoltage, signedCurrent, temperature,
-            soc, soh, rulMonths,
-            fault, faultReason(),
-            isChargingActive(), isFanActive());
+  /* Refresh fault flag after evaluation and recovery check */
+  fault = isFaulted();
 
-  displayTelemetry(packVoltage, iData, temperature, soc, fault);
+  /* ── SOH: Battery aging check ── */
+  if (needsReplacement() && !isFaultActive(FAULT_BATTERY_AGING))
+    triggerExternalFault(FAULT_BATTERY_AGING, "BATTERY AGING");
 
-  /* ── J. Cloud upload (rate-limited inside function) ── */
-  uploadSystemData(packVoltage, iData, temperature, fault);
+  /* ══════════════════════════════════════════════════════════
+     STEP 5 – RELAY / ACTUATOR CONTROL
+     ══════════════════════════════════════════════════════════ */
+
+  /* Charging interlock (also handles motor relay during charge) */
+  controlCharging(packVoltage, fault);
+
+  /* Motor relay – driven purely by live current, never relay state */
+  controlMotorRelay(fault, iData.current);
+
+  /* Charging current monitor – alerts based on actual INA219 reading */
+  monitorChargingCurrent(iData.current, packVoltage);
+
+  /* Thermal management */
+  controlThermalManagement(temperature, fault);
+
+  /* ══════════════════════════════════════════════════════════
+     STEP 6 – DISPLAY  (LCD)
+     ══════════════════════════════════════════════════════════ */
+
+#if ENABLE_LOCAL_DISPLAY
+  lcdUpdate(
+    packVoltage,
+    iData.current,
+    temperature,
+    soc,
+    getSOH(),
+    (int)(estimateRULDays() / 30),   // days → approximate months
+    fault,
+    faultReason(),
+    isChargingActive(),
+    isFanActive()
+  );
+#endif
+
+  /* ══════════════════════════════════════════════════════════
+     STEP 7 – SERIAL TELEMETRY  (every 2 s)
+     ══════════════════════════════════════════════════════════ */
+
+  if (millis() - lastTelemetryTime >= TELEMETRY_INTERVAL_MS) {
+    displayTelemetry(packVoltage, iData, temperature, soc, fault);
+    lastTelemetryTime = millis();
+  }
+
+  /* ══════════════════════════════════════════════════════════
+     STEP 8 – CLOUD UPLOAD  (throttled inside uploadSystemData)
+     ══════════════════════════════════════════════════════════ */
+
+#if ENABLE_CLOUD_DASHBOARD
+  uploadSystemData(packVoltage, iData, temperature, soc, fault);
+#endif
 }

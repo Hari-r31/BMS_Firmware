@@ -7,8 +7,11 @@
 /* ================= Private ================= */
 
 static Adafruit_INA219 ina219;
-static bool initialized = false;
-static float peakCurrent = 0.0;
+static bool  initialized = false;
+static float peakCurrent = 0.0f;
+
+/* Idle dead-band: currents below this are treated as IDLE */
+#define IDLE_THRESHOLD_A  0.15f
 
 /* ================= Init ================= */
 
@@ -16,8 +19,8 @@ void initCurrent() {
   if (initialized) return;
 
   if (!ina219.begin()) {
-    Serial.println("[INA219] Not detected!");
-    while (1);
+    Serial.println("[INA219] Sensor not detected – halting");
+    while (1) { delay(1000); }
   }
 
   Serial.println("[INA219] Initialized");
@@ -26,15 +29,28 @@ void initCurrent() {
 
 /* ================= Read ================= */
 
+/*
+ * Sign convention (system-wide):
+ *   Positive  = discharging (current flows OUT of battery to load)
+ *   Negative  = charging    (current flows INTO battery from charger)
+ *
+ * INA219 wired with IN+ toward battery, IN- toward load/charger:
+ *   - Load drawing current  → INA219 reads POSITIVE → discharging ✓
+ *   - Charger pushing in    → INA219 reads NEGATIVE → charging    ✓
+ *
+ * Raw value is used directly – no negation needed.
+ * If your hardware is wired the other way (IN+ toward load),
+ * uncomment the negation line below.
+ */
 float readCurrent() {
   if (!initialized) initCurrent();
 
-  float current_mA = ina219.getCurrent_mA();
-  float current_A = current_mA / 1000.0;
+  float current_A = ina219.getCurrent_mA() / 1000.0f;
+  // If charging and discharging are still swapped, uncomment:
+  current_A = -current_A;
 
-  if (fabs(current_A) > peakCurrent) {
-    peakCurrent = fabs(current_A);
-  }
+  float absA = fabsf(current_A);
+  if (absA > peakCurrent) peakCurrent = absA;
 
   return current_A;
 }
@@ -43,19 +59,20 @@ CurrentData readCurrentData() {
   CurrentData data = {};
 
   data.current = readCurrent();
-  if (data.current > 0.2)
+
+  if (data.current > IDLE_THRESHOLD_A)
     data.direction = CURRENT_DISCHARGING;
-  else if (data.current < -0.2)
+  else if (data.current < -IDLE_THRESHOLD_A)
     data.direction = CURRENT_CHARGING;
   else
     data.direction = CURRENT_IDLE;
 
-  float power_mW = ina219.getPower_mW();
-  data.powerWatts = power_mW / 1000.0;
+  /* INA219 power register: always positive, in mW */
+  data.powerWatts = ina219.getPower_mW() / 1000.0f;
 
-  data.overCurrent = checkOvercurrent(data.current, data.direction);
-  data.overcurrentWarning = false;
-  data.overcurrentFault = false;
+  data.overCurrent       = checkOvercurrent(data.current, data.direction);
+  data.overcurrentWarning = (fabsf(data.current) > MAX_DISCHARGE_CURRENT * 0.8f);
+  data.overcurrentFault   = data.overCurrent;
 
   return data;
 }
@@ -66,31 +83,34 @@ float calculatePower(float current, float voltage) {
   return current * voltage;
 }
 
-float getPeakCurrent() {
-  return peakCurrent;
-}
-
-void resetPeakCurrent() {
-  peakCurrent = 0.0;
-}
+float getPeakCurrent()    { return peakCurrent; }
+void  resetPeakCurrent()  { peakCurrent = 0.0f; }
 
 bool checkOvercurrent(float current, CurrentDirection direction) {
-  if (direction == CURRENT_CHARGING) {
-    return fabs(current) > MAX_CHARGE_CURRENT;
+  /* Spec: overcurrent must be sustained for OVERCURRENT_DURATION_MS before
+     the fault is declared (prevents single-sample spikes from tripping). */
+  static unsigned long ocStartMs = 0;
+
+  bool rawOC = false;
+  if (direction == CURRENT_CHARGING)
+    rawOC = fabsf(current) > MAX_CHARGE_CURRENT;
+  else if (direction == CURRENT_DISCHARGING)
+    rawOC = fabsf(current) > MAX_DISCHARGE_CURRENT;
+
+  if (rawOC) {
+    if (ocStartMs == 0) ocStartMs = millis();
+    return (millis() - ocStartMs) >= OVERCURRENT_DURATION_MS;
+  } else {
+    ocStartMs = 0;   // reset timer when current returns to safe range
+    return false;
   }
-  if (direction == CURRENT_DISCHARGING) {
-    return fabs(current) > MAX_DISCHARGE_CURRENT;
-  }
-  return false;
 }
 
 bool currentSensorHealthy() {
-  float current = readCurrent();
-
-  if (fabs(current) > 50.0) {  // sanity limit
-    Serial.println("[INA219] Sensor out of range");
+  float c = readCurrent();
+  if (fabsf(c) > 100.0f) {
+    Serial.println("[INA219] Reading out of range");
     return false;
   }
-
   return true;
 }

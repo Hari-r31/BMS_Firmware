@@ -1,30 +1,28 @@
 #include "rul.h"
 #include "soh.h"
+#include "nvs_logger.h"
 #include "config.h"
 
 /* ================= Private ================= */
 
-static bool initialized = false;
-static int rulCycles = RUL_CYCLES_NEW;
-static unsigned long rulHours = 0;
-static float rulPercentage = 100.0;
+static bool          initialized    = false;
+static int           rulCycles      = RUL_CYCLES_NEW;
+static unsigned long rulHours       = 0;
+static float         rulPercentage  = 100.0f;
 
-/* Moving averages */
 static float avgPackVoltage = NOMINAL_CELL_VOLTAGE * NUM_CELLS;
-static float avgTemperature = 25.0;
+static float avgTemperature = 25.0f;
 
 /* ================= Helpers ================= */
 
-static void updateMovingAverages(float voltage, float temperature) {
-  const float alpha = 0.1;
-  avgPackVoltage = avgPackVoltage * (1.0 - alpha) + voltage * alpha;
-  avgTemperature = avgTemperature * (1.0 - alpha) + temperature * alpha;
+static float clamp(float v, float lo, float hi) {
+  return (v < lo) ? lo : (v > hi) ? hi : v;
 }
 
-static float clamp(float v, float minV, float maxV) {
-  if (v < minV) return minV;
-  if (v > maxV) return maxV;
-  return v;
+static void updateMovingAverages(float voltage, float temperature) {
+  const float alpha = 0.1f;
+  avgPackVoltage = avgPackVoltage * (1.0f - alpha) + voltage * alpha;
+  avgTemperature = avgTemperature * (1.0f - alpha) + temperature * alpha;
 }
 
 /* ================= Public ================= */
@@ -32,119 +30,88 @@ static float clamp(float v, float minV, float maxV) {
 void initRUL() {
   if (initialized) return;
 
-  float soh = getSOH();
-  rulCycles = (int)(RUL_CYCLES_NEW * (soh / 100.0));
+  float soh    = getSOH();
+  rulCycles    = (int)((float)RUL_CYCLES_NEW * (soh / 100.0f));
   rulPercentage = soh;
 
-  initialized = true;
-
-  Serial.print("[RUL] Initialized, cycles remaining: ");
-  Serial.println(rulCycles);
+  initialized  = true;
+  Serial.printf("[RUL] Initialized: %d cycles remaining\n", rulCycles);
 }
 
-int estimateRUL() {
-  if (!initialized) initRUL();
-  return rulCycles;
-}
-
-unsigned long estimateRULHours() {
-  if (!initialized) initRUL();
-  return rulHours;
-}
-
-unsigned long estimateRULDays() {
-  return rulHours / 24;
-}
-
-float getRULPercentage() {
-  return rulPercentage;
-}
-
-void updateRUL(
-  float packVoltage,
-  float temperature,
-  float soh,
-  unsigned long cycleCount
-) {
+void updateRUL(float packVoltage, float temperature,
+               float soh, unsigned long cycleCount) {
   if (!initialized) initRUL();
 
   updateMovingAverages(packVoltage, temperature);
 
   float vFactor = getVoltageRULFactor(avgPackVoltage);
   float tFactor = getTemperatureRULFactor(avgTemperature);
-  float cFactor = getCycleRULFactor(cycleCount, RUL_CYCLES_NEW);
+  float cFactor = getCycleRULFactor(cycleCount, (unsigned long)RUL_CYCLES_NEW);
 
-  float combined =
+  float combined = clamp(
     vFactor * RUL_VOLTAGE_WEIGHT +
-    tFactor * RUL_TEMP_WEIGHT +
-    cFactor * RUL_CYCLE_WEIGHT;
+    tFactor * RUL_TEMP_WEIGHT   +
+    cFactor * RUL_CYCLE_WEIGHT,
+    0.0f, 1.0f
+  );
 
-  combined = clamp(combined, 0.0, 1.0);
+  rulPercentage = clamp(soh * combined, 0.0f, 100.0f);
 
-  rulPercentage = clamp(soh * combined, 0.0, 100.0);
+  unsigned long totalCycles = (unsigned long)((float)RUL_CYCLES_NEW * (soh / 100.0f));
+  rulCycles  = (cycleCount < totalCycles) ? (int)(totalCycles - cycleCount) : 0;
 
-  unsigned long totalCycles =
-    (unsigned long)(RUL_CYCLES_NEW * (soh / 100.0));
-
-  rulCycles = (cycleCount < totalCycles)
-                ? (totalCycles - cycleCount)
-                : 0;
-
-  /* Assumption: 1 cycle per day */
-  rulHours = rulCycles * 24;
-  rulHours = (unsigned long)(rulHours * combined);
+  /* 1 cycle per day assumption → hours = cycles × 24 × combined-factor */
+  rulHours   = (unsigned long)((float)(rulCycles * 24) * combined);
 }
 
-/* ================= Factors ================= */
+int           estimateRUL()        { return rulCycles;     }
+unsigned long estimateRULHours()   { return rulHours;      }
+unsigned long estimateRULDays()    { return rulHours / 24; }
+float         getRULPercentage()   { return rulPercentage; }
+
+/* ================= Factor Functions ================= */
 
 float getVoltageRULFactor(float packVoltage) {
-  float nominalPackVoltage = NOMINAL_CELL_VOLTAGE * NUM_CELLS;
-  float ratio = packVoltage / nominalPackVoltage;
+  float nominal = NOMINAL_CELL_VOLTAGE * NUM_CELLS;
+  float ratio   = packVoltage / nominal;
 
-  if (ratio >= 1.0) return 1.0;
-  if (ratio >= 0.95) return 0.9;
-  if (ratio >= 0.90) return 0.7;
-  if (ratio >= 0.85) return 0.5;
-  return 0.3;
+  if (ratio >= 1.00f) return 1.0f;
+  if (ratio >= 0.95f) return 0.9f;
+  if (ratio >= 0.90f) return 0.7f;
+  if (ratio >= 0.85f) return 0.5f;
+  return 0.3f;
 }
 
 float getTemperatureRULFactor(float temperature) {
-  if (temperature >= 20.0 && temperature <= 30.0) return 1.0;
+  if (temperature >= 20.0f && temperature <= 30.0f) return 1.0f;
 
-  if (temperature < 20.0) {
-    float d = 20.0 - temperature;
-    return clamp(1.0 - d * 0.01, 0.7, 1.0);
-  }
+  if (temperature < 20.0f)
+    return clamp(1.0f - (20.0f - temperature) * 0.01f, 0.7f, 1.0f);
 
-  float d = temperature - 30.0;
-  return clamp(1.0 - d * 0.03, 0.2, 1.0);
+  return clamp(1.0f - (temperature - 30.0f) * 0.03f, 0.2f, 1.0f);
 }
 
 float getCycleRULFactor(unsigned long cycleCount, unsigned long maxCycles) {
-  if (cycleCount >= maxCycles) return 0.0;
-  return 1.0 - ((float)cycleCount / maxCycles);
+  if (cycleCount >= maxCycles) return 0.0f;
+  return 1.0f - ((float)cycleCount / (float)maxCycles);
 }
 
-/* ================= Replacement ================= */
+/* ================= Replacement Prediction ================= */
 
 unsigned long predictReplacementDate() {
-  float soh = getSOH();
+  float         soh    = getSOH();
   if (soh <= SOH_MIN_THRESHOLD) return 0;
 
   unsigned long cycles = getCycleCount();
   if (cycles == 0) cycles = 1;
 
-  float degradationPerCycle = (100.0 - soh) / cycles;
-  if (degradationPerCycle <= 0.0) return 0;
+  float degradePerCycle = (100.0f - soh) / (float)cycles;
+  if (degradePerCycle <= 0.0f) return 0;
 
   float remainingSOH = soh - SOH_MIN_THRESHOLD;
-  unsigned long cyclesLeft =
-    (unsigned long)(remainingSOH / degradationPerCycle);
-
-  return cyclesLeft;  // days (1 cycle/day assumption)
+  return (unsigned long)(remainingSOH / degradePerCycle);  // days (1 cycle/day)
 }
 
 bool replacementNeeded() {
-  return (predictReplacementDate() <= 30 ||
-          getSOH() <= SOH_MIN_THRESHOLD);
+  return (predictReplacementDate() <= 30 || getSOH() <= SOH_MIN_THRESHOLD);
 }

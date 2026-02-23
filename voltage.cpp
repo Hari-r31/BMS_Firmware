@@ -2,31 +2,29 @@
 #include "voltage.h"
 #include "config.h"
 
-/* ================= Private ================= */
+/* ================= Calibration ================= */
+
+/*
+ * Adjust these two constants to match your hardware:
+ *   VOLTAGE_DIVIDER – the actual resistor-divider ratio feeding the ADC pin.
+ *                     For a 3S pack (max ~12.6 V) into a 3.3 V ADC, a typical
+ *                     divider ratio is 4:1 or 5:1.
+ *   VOLTAGE_CORR    – measured trim factor to absorb component tolerances.
+ */
+static const float VOLTAGE_DIVIDER = 5.0f;
+static const float VOLTAGE_CORR    = 1.092f;
 
 static bool initialized = false;
 
-/* 
- * These MUST match your real-world calibration
- * DIVIDER = effective hardware scaling
- * CORR    = ADC + tolerance correction
- */
-static const float VOLTAGE_DIVIDER = 5.0f;   // effective divider ratio
-static const float VOLTAGE_CORR    = 1.092f; // measured calibration factor
-
-/* ================= ADC ================= */
+/* ================= ADC helpers ================= */
 
 static float readADCVoltage() {
   uint32_t sum = 0;
-
   for (int i = 0; i < ADC_SAMPLES; i++) {
-    sum += analogRead(VOLTAGE_PACK_PIN);
+    sum += (uint32_t)analogRead(VOLTAGE_PACK_PIN);
     delayMicroseconds(80);
   }
-
-  float avg = (float)sum / ADC_SAMPLES;
-
-  // Convert ADC counts → volts at ESP32 pin
+  float avg = (float)sum / (float)ADC_SAMPLES;
   return (avg / ADC_RESOLUTION) * ADC_VREF;
 }
 
@@ -36,42 +34,29 @@ void initVoltage() {
   if (initialized) return;
 
   pinMode(VOLTAGE_PACK_PIN, INPUT);
-
-  // CRITICAL for ESP32 ADC accuracy
-  analogSetPinAttenuation(VOLTAGE_PACK_PIN, ADC_11db);
+  analogSetPinAttenuation(VOLTAGE_PACK_PIN, ADC_11db);   // 0–3.3 V range
 
   initialized = true;
-  Serial.println("[VOLTAGE] Pack voltage monitoring initialized");
+  Serial.println("[VOLTAGE] Initialized");
 }
 
 void calibrateVoltage() {
-  // Calibration is handled by VOLTAGE_CORR
-  Serial.println("[VOLTAGE] Using calibrated divider + correction");
+  Serial.printf("[VOLTAGE] Divider=%.2f  Correction=%.4f\n",
+                VOLTAGE_DIVIDER, VOLTAGE_CORR);
 }
 
 float readPackVoltage() {
   if (!initialized) initVoltage();
-
-  float v_adc = readADCVoltage();
-
-  // Correct, real-world scaling
-  float packVoltage = v_adc * VOLTAGE_DIVIDER * VOLTAGE_CORR;
-
-  return packVoltage;
+  return readADCVoltage() * VOLTAGE_DIVIDER * VOLTAGE_CORR;
 }
 
-float readVoltage() {
-  return readPackVoltage();
-}
+float readVoltage() { return readPackVoltage(); }
 
 bool voltageSystemHealthy() {
   float v = readPackVoltage();
-
-  // 3S sanity check (very wide on purpose)
-  if (v < 5.0 || v > 15.0) {
-    Serial.println("[VOLTAGE] Error: Voltage out of expected range");
-    return false;
-  }
-
-  return true;
+  bool  ok = (v >= (CELL_MIN_VOLTAGE * NUM_CELLS * 0.9f) &&
+              v <= (CELL_MAX_VOLTAGE * NUM_CELLS * 1.1f));
+  if (!ok)
+    Serial.printf("[VOLTAGE] Out of range: %.2f V\n", v);
+  return ok;
 }
