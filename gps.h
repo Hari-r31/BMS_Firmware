@@ -1,40 +1,50 @@
 #pragma once
-
 #include <Arduino.h>
 
-/* ================= GPS Data Structure ================= */
+/* ═══════════════════════════════════════════
+   GPS DATA STRUCTURE
+   ═══════════════════════════════════════════ */
 
 struct GPSData {
-  bool valid;
-  float latitude;
-  float longitude;
-  float altitude;
-  float speed;
+  bool    valid;
+  float   latitude;
+  float   longitude;
+  float   altitude;
+  float   speed;
+  float   accuracy;         // metres – WiFi geo gives this; hardware GPS gives 0
   uint8_t satellites;
-  bool geofenceViolation;
-  float distanceFromHome;
+  bool    geofenceViolation;
+  float   distanceFromHome;
+
+  // Source of fix
+  enum class Source { NONE, WIFI_GEO, HARDWARE_GPS } source;
 };
 
-/* ================= Core API ================= */
+/* ═══════════════════════════════════════════
+   CORE API  (unchanged – all callers still compile)
+   ═══════════════════════════════════════════ */
 
-void initGPS();
-void updateGPS();
+void    initGPS();
+void    updateGPS();
 GPSData getGPSData();
 
-bool hasGPSFix();
-bool isGeofenceViolated();
-bool gpsHealthy();
+bool    hasGPSFix();
+bool    isGeofenceViolated();
+bool    gpsHealthy();
 
-void setGeofenceEnabled(bool enable);
-void setHomeLocation(float lat, float lon);
+void    setGeofenceEnabled(bool enable);
+void    setHomeLocation(float lat, float lon);
 
-/* ================= Utility ================= */
+/* ═══════════════════════════════════════════
+   UTILITIES
+   ═══════════════════════════════════════════ */
 
 float calculateDistance(float lat1, float lon1, float lat2, float lon2);
-void getGPSLocationString(char* buffer, size_t bufferSize);
+void  getGPSLocationString(char* buffer, size_t bufferSize);
 
-/* ================= LEGACY HELPERS (FIX YOUR ERROR) ================= */
+/* ═══════════════════════════════════════════
+   LEGACY HELPERS
+   ═══════════════════════════════════════════ */
 
-// These are REQUIRED because BMS_Firmware.ino calls them
 float gpsGetLatitude();
 float gpsGetLongitude();

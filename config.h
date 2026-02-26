@@ -3,8 +3,8 @@
 /* =========================================================
    WIFI
    ========================================================= */
-static const char* WIFI_SSID = "scrap";
-static const char* WIFI_PASS = "we4rscrap!";
+static const char* WIFI_SSID = "OPPO A3 Pro 5G";
+static const char* WIFI_PASS = "11111111";
 
 /* =========================================================
    SUPABASE CLOUD
@@ -24,11 +24,19 @@ static const char* SUPABASE_KEY =
 #define GSM_BAUD          9600
 
 /* =========================================================
-   GPS MODULE
+   GPS / GEOLOCATION
+   =========================================================
+   Primary method: WiFi-based geolocation using nearby AP MAC
+   addresses (BSSIDs). No extra hardware or API key required.
+   Uses the free BeaconDB community database.
+
+   Optional fallback: hardware GPS module on UART1.
+   Set ENABLE_HARDWARE_GPS to true only if you have one wired.
    ========================================================= */
-#define GPS_RX   18
-#define GPS_TX   19
-#define GPS_BAUD 9600
+#define ENABLE_HARDWARE_GPS  false   // set true if UART GPS module is wired
+#define GPS_RX               18      // only used when ENABLE_HARDWARE_GPS true
+#define GPS_TX               19
+#define GPS_BAUD             9600
 
 /* =========================================================
    I2C BUS

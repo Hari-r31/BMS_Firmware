@@ -8,7 +8,8 @@
  * REQUIRED LIBRARIES (install via Library Manager):
  *   - Adafruit INA219            (current sensor)
  *   - DHT sensor library         (temperature)
- *   - TinyGPS++                  (GPS NMEA parser)
+ *   - ArduinoJson                (WiFi geolocation JSON parsing)
+ *   - TinyGPS++                  (optional – only if hardware GPS wired)
  *   - hd44780                    (LCD I2C)
  *   - Preferences                (ESP32 NVS – built-in)
  * ============================================================
