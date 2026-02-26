@@ -190,26 +190,6 @@ void checkExternalEvents() {
   static const unsigned long IMPACT_COOLDOWN_MS    = 10000UL;  // 10 s (serious – shorter)
   static const unsigned long SHOCK_COOLDOWN_MS     = 10000UL;  // 10 s
 
-  /* ── GPS update ── */
-#if ENABLE_GEOLOCATION
-  updateGPS();
-
-  if (isGeofenceViolated()) {
-    triggerExternalFault(FAULT_GEOFENCE_VIOLATION, "GEOFENCE VIOLATION");
-
-    if (millis() - lastGeofenceAlertMs >= GEOFENCE_COOLDOWN_MS) {
-      lastGeofenceAlertMs = millis();
-
-      char msg[200];
-      snprintf(msg, sizeof(msg),
-               "BMS ALERT [%s]\nGEOFENCE VIOLATED\nVehicle left safe zone",
-               DEVICE_ID);
-      appendGPSLocation(msg, sizeof(msg));
-
-      sendAlert(msg, "BMS: GEOFENCE ALERT");
-    }
-  }
-#endif
 
   /* ── Accelerometer ── */
 #if ENABLE_IMPACT_DETECTION

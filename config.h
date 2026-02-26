@@ -3,7 +3,7 @@
 /* =========================================================
    WIFI
    ========================================================= */
-static const char* WIFI_SSID = "Coder";
+static const char* WIFI_SSID = "coder";
 static const char* WIFI_PASS = "we4rscrap!";
 
 /* =========================================================
