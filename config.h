@@ -10,10 +10,10 @@ static const char* WIFI_PASS = "we4rscrap!";
    SUPABASE CLOUD
    ========================================================= */
 static const char* SUPABASE_URL =
-  "https://omfcwxwtblbhuucqhljf.supabase.co/rest/v1/bms_telemetry";
+  "enter your supabse";
 
 static const char* SUPABASE_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9tZmN3eHd0YmxiaHV1Y3FobGpmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk1MTUxMjgsImV4cCI6MjA4NTA5MTEyOH0.--PZM64ogLL_DIUS7N6ZgFH1L5E8WBWZ4X642L3xnno";
+  "anon key here";
 
 /* =========================================================
    GSM MODULE
