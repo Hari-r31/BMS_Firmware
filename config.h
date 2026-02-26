@@ -3,8 +3,8 @@
 /* =========================================================
    WIFI
    ========================================================= */
-static const char* WIFI_SSID = "OPPO A3 Pro 5G";
-static const char* WIFI_PASS = "11111111";
+static const char* WIFI_SSID = "Coder";
+static const char* WIFI_PASS = "we4rscrap!";
 
 /* =========================================================
    SUPABASE CLOUD
