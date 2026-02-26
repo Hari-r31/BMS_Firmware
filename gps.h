@@ -11,17 +11,18 @@ struct GPSData {
   float   longitude;
   float   altitude;
   float   speed;
-  float   accuracy;         // metres – WiFi geo gives this; hardware GPS gives 0
+  float   accuracy;         // metres – WiFi geo gives this; hardware GPS gives ~5 m
   uint8_t satellites;
-  bool    geofenceViolation;
-  float   distanceFromHome;
 
   // Source of fix
-  enum class Source { NONE, WIFI_GEO, HARDWARE_GPS } source;
+  enum class Source { NONE, HARDWARE_GPS, WIFI_GEO } source;
+
+  // NOTE: Geofence comparison is handled by the UI.
+  //       Firmware only reports coordinates.
 };
 
 /* ═══════════════════════════════════════════
-   CORE API  (unchanged – all callers still compile)
+   CORE API
    ═══════════════════════════════════════════ */
 
 void    initGPS();
@@ -29,11 +30,7 @@ void    updateGPS();
 GPSData getGPSData();
 
 bool    hasGPSFix();
-bool    isGeofenceViolated();
 bool    gpsHealthy();
-
-void    setGeofenceEnabled(bool enable);
-void    setHomeLocation(float lat, float lon);
 
 /* ═══════════════════════════════════════════
    UTILITIES
